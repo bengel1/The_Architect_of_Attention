@@ -241,7 +241,7 @@ if __name__ == "__main__":
     main()
     
 st.markdown("---")
-            st.subheader("Micro vs. Macro Perspective")
+    st.subheader("Micro vs. Macro Perspective")
            
             # Use columns to compare individual journey vs population stats
             col_micro, col_macro = st.columns(2)
