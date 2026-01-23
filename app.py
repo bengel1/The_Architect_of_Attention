@@ -54,6 +54,11 @@ def main():
     
     col_inputs, col_viz = st.columns([1, 2])
     
+    # Initialize variables to None to prevent NameError if block fails
+    start_vec = None
+    matrix = None
+    valid_matrix = False
+    
     with col_inputs:
         st.subheader("Simulation Parameters")
         
@@ -62,7 +67,7 @@ def main():
         with c1:
             time_steps = st.number_input("Time Steps (Days)", min_value=1, max_value=365, value=30)
         with c2:
-            num_sims = st.number_input("Simulations (N)", min_value=1, value=100, help="Used for stochastic reference, though calculation is analytic.")
+            num_sims = st.number_input("Simulations (N)", min_value=1, value=100, help="Used for stochastic reference.")
 
         # 2. Starting Vector Input
         st.markdown("### Starting Distribution ($\pi_0$)")
@@ -120,28 +125,31 @@ def main():
         # 4. State Diagram
         st.markdown("### State Diagram")
         if valid_matrix:
-            graph = graphviz.Digraph()
-            graph.attr(rankdir='LR', size='8,5')
-            
-            for i, source in enumerate(STATES):
-                # Node style
-                color = COLORS[source]
-                graph.node(source, style='filled', fillcolor='white', color=color, fontcolor='black')
+            try:
+                graph = graphviz.Digraph()
+                graph.attr(rankdir='LR', size='8,5')
                 
-                for j, target in enumerate(STATES):
-                    weight = matrix[i][j]
-                    if weight > 0.01:
-                        # Edge style based on weight
-                        penwidth = str(1 + weight * 3)
-                        label = f"{weight:.2f}"
-                        graph.edge(source, target, label=label, penwidth=penwidth, color='gray')
-            
-            st.graphviz_chart(graph)
+                for i, source in enumerate(STATES):
+                    # Node style
+                    color = COLORS[source]
+                    graph.node(source, style='filled', fillcolor='white', color=color, fontcolor='black')
+                    
+                    for j, target in enumerate(STATES):
+                        weight = matrix[i][j]
+                        if weight > 0.01:
+                            # Edge style based on weight
+                            penwidth = str(1 + weight * 3)
+                            label = f"{weight:.2f}"
+                            graph.edge(source, target, label=label, penwidth=penwidth, color='gray')
+                
+                st.graphviz_chart(graph)
+            except Exception:
+                st.warning("Graphviz executable not found. Diagram skipped.")
 
     # --- Calculations & Visualization ---
     
     with col_viz:
-        if valid_matrix and np.isclose(np.sum(start_vec), 1.0, atol=0.001):
+        if valid_matrix and start_vec is not None and np.isclose(np.sum(start_vec), 1.0, atol=0.001):
             
             # 1. Properties Header
             is_irreducible = check_irreducible(matrix)
@@ -237,82 +245,88 @@ def main():
                 if note:
                     st.info(note)
 
-if __name__ == "__main__":
-    main()
-    
-st.markdown("---")
-st.subheader("Micro vs. Macro Perspective")
-           
-# Use columns to compare individual journey vs population stats
-col_micro, col_macro = st.columns(2)
+            # 5. Micro vs Macro Perspective
+            st.markdown("---")
+            st.subheader("Micro vs. Macro Perspective")
+            
+            # Use columns to compare individual journey vs population stats
+            col_micro, col_macro = st.columns(2)
+            
+            # A. Micro: Single User Random Walk
+            with col_micro:
+                st.markdown("**The Micro Perspective (The Individual)**")
+                st.caption("A stochastic journey of ONE user based on transition probabilities.")
+                
+                # Run single simulation
+                path_states = []
+                # Choose start state based on start_vec probabilities
+                # Validate probability sum again for random.choice to avoid tolerance errors
+                # Ensure we have a valid start vector to work with
+                if start_vec is not None:
+                    p_start = start_vec / np.sum(start_vec)
+                    current_idx = np.random.choice(len(STATES), p=p_start)
+                    path_states.append(STATES[current_idx])
+                    
+                    for _ in range(time_steps):
+                        # Choose next state based on current state's row in matrix
+                        row_probs = matrix[current_idx] / np.sum(matrix[current_idx])
+                        current_idx = np.random.choice(len(STATES), p=row_probs)
+                        path_states.append(STATES[current_idx])
+                    
+                    # Plot Path
+                    micro_df = pd.DataFrame({
+                        'Day': range(len(path_states)),
+                        'State': path_states
+                    })
+                    
+                    micro_chart = alt.Chart(micro_df).mark_line(interpolate='step-after', point=True).encode(
+                        x='Day',
+                        y=alt.Y('State', sort=STATES),
+                        color=alt.value('gray'),
+                        tooltip=['Day', 'State']
+                    ).properties(height=300, title="Single User Trajectory")
+                    
+                    st.altair_chart(micro_chart, use_container_width=True)
 
-# A. Micro: Single User Random Walk
-with col_micro:
-    st.markdown("**The Micro Perspective (The Individual)**")
-    st.caption("A stochastic journey of ONE user based on transition probabilities.")
-   
-    # Run single simulation
-    path_states = []
-    # Choose start state based on start_vec probabilities
-    current_idx = np.random.choice(len(STATES), p=start_vec)
-    path_states.append(STATES[current_idx])
-   
-    for _ in range(time_steps):
-        # Choose next state based on current state's row in matrix
-        current_idx = np.random.choice(len(STATES), p=matrix[current_idx])
-        path_states.append(STATES[current_idx])
-   
-    # Plot Path
-    micro_df = pd.DataFrame({
-        'Day': range(len(path_states)),
-        'State': path_states
-    })
-   
-    micro_chart = alt.Chart(micro_df).mark_line(interpolate='step-after', point=True).encode(
-        x='Day',
-        y=alt.Y('State', sort=STATES),
-        color=alt.value('gray'),
-        tooltip=['Day', 'State']
-    ).properties(height=300, title="Single User Trajectory")
-   
-    st.altair_chart(micro_chart, use_container_width=True)
-
-# B. Macro: Ensemble Simulation (Monte Carlo)
-with col_macro:
-    st.markdown(f"**The Macro Perspective (The Population)**")
-    st.caption(f"Where {num_sims} users ended up on Day {selected_day} (Simulated vs Theoretical).")
-   
-    # Monte Carlo for N users
-    final_counts = {s: 0 for s in STATES}
-   
-    for _ in range(num_sims):
-        # Start
-        c_idx = np.random.choice(len(STATES), p=start_vec)
-        # Walk to selected day
-        for _ in range(selected_day):
-            c_idx = np.random.choice(len(STATES), p=matrix[c_idx])
-        final_counts[STATES[c_idx]] += 1
-   
-    # Prepare data for comparison
-    sim_probs = [final_counts[s] / num_sims for s in STATES]
-    theo_probs = [day_data[s] for s in STATES]
-   
-    comp_df = pd.DataFrame({
-        'State': STATES * 2,
-        'Probability': sim_probs + theo_probs,
-        'Type': ['Simulated (Micro Aggregated)'] * 3 + ['Theoretical (Macro Formula)'] * 3
-    })
-   
-    # Grouped Bar Chart
-    macro_comp_chart = alt.Chart(comp_df).mark_bar().encode(
-        x=alt.X('State', axis=None),
-        y='Probability',
-        color='Type',
-        column=alt.Column('State', header=alt.Header(titleOrient="bottom", labelOrient="bottom")),
-        tooltip=['State', 'Type', alt.Tooltip('Probability', format='.2%')]
-    ).properties(height=300, title=f"Day {selected_day} Distribution")
-   
-    st.altair_chart(macro_comp_chart, use_container_width=True)
+            # B. Macro: Ensemble Simulation (Monte Carlo)
+            with col_macro:
+                st.markdown(f"**The Macro Perspective (The Population)**")
+                st.caption(f"Where {num_sims} users ended up on Day {selected_day} (Simulated vs Theoretical).")
+                
+                if start_vec is not None:
+                    # Monte Carlo for N users
+                    final_counts = {s: 0 for s in STATES}
+                    
+                    for _ in range(num_sims):
+                        # Start
+                        p_start = start_vec / np.sum(start_vec)
+                        c_idx = np.random.choice(len(STATES), p=p_start)
+                        # Walk to selected day
+                        for _ in range(selected_day):
+                            row_probs = matrix[c_idx] / np.sum(matrix[c_idx])
+                            c_idx = np.random.choice(len(STATES), p=row_probs)
+                        final_counts[STATES[c_idx]] += 1
+                    
+                    # Prepare data for comparison
+                    sim_probs = [final_counts[s] / num_sims for s in STATES]
+                    theo_probs = [day_data[s] for s in STATES]
+                    
+                    comp_df = pd.DataFrame({
+                        'State': STATES * 2,
+                        'Probability': sim_probs + theo_probs,
+                        'Type': ['Simulated (Micro Aggregated)'] * 3 + ['Theoretical (Macro Formula)'] * 3
+                    })
+                    
+                    # Grouped Bar Chart
+                    macro_comp_chart = alt.Chart(comp_df).mark_bar().encode(
+                        x=alt.X('State', axis=None),
+                        y='Probability',
+                        color='Type',
+                        column=alt.Column('State', header=alt.Header(titleOrient="bottom", labelOrient="bottom")),
+                        tooltip=['State', 'Type', alt.Tooltip('Probability', format='.2%')]
+                    ).properties(height=300, title=f"Day {selected_day} Distribution")
+                    
+                    st.altair_chart(macro_comp_chart, use_container_width=True)
 
 if __name__ == "__main__":
     main()
