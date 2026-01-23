@@ -315,4 +315,4 @@ with col_macro:
     st.altair_chart(macro_comp_chart, use_container_width=True)
 
 if __name__ == "__main__":
-main()
+    main()
